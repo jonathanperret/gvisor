@@ -280,6 +280,8 @@ type Config struct {
 	// should not have a symlink.
 	Rootless bool `flag:"rootless"`
 
+        Unprivileged bool `flag:"unprivileged"`
+
 	// AlsoLogToStderr allows to send log messages to stderr.
 	AlsoLogToStderr bool `flag:"alsologtostderr"`
 

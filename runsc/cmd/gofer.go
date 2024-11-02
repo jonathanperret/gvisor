@@ -201,26 +201,28 @@ func (g *Gofer) Execute(_ context.Context, f *flag.FlagSet, args ...any) subcomm
 	goferToHostRPC := urpc.NewClient(goferToHostRPCSock)
 	defer goferToHostRPC.Close()
 
-	if g.setUpRoot {
-		if err := sandboxsetup.SetupRootFS(spec, conf, g.mountConfs, g.devIoFD, makeRPCMountOpener(goferToHostRPC), containerID, g.bundleDir); err != nil {
-			util.Fatalf("Error setting up root FS: %v", err)
+	if !conf.Unprivileged {
+		if g.setUpRoot {
+			if err := sandboxsetup.SetupRootFS(spec, conf, g.mountConfs, g.devIoFD, makeRPCMountOpener(goferToHostRPC), containerID, g.bundleDir); err != nil {
+				util.Fatalf("Error setting up root FS: %v", err)
+			}
+			if !conf.TestOnlyAllowRunAsCurrentUserWithoutChroot {
+				cleanupUnmounter := g.syncFDs.spawnProcUnmounter()
+				defer cleanupUnmounter()
+			}
 		}
-		if !conf.TestOnlyAllowRunAsCurrentUserWithoutChroot {
-			cleanupUnmounter := g.syncFDs.spawnProcUnmounter()
-			defer cleanupUnmounter()
+		if g.applyCaps {
+			overrides := g.syncFDs.flags()
+			overrides["apply-caps"] = "false"
+			overrides["setup-root"] = "false"
+			args := sandboxsetup.PrepareArgs(g.Name(), f, overrides)
+			capsToApply := goferCaps
+			if conf.GetHostUDS().AllowOpen() {
+				capsToApply = specutils.MergeCapabilities(capsToApply, goferUdsOpenCaps)
+			}
+			util.Fatalf("setCapsAndCallSelf(%v, %v): %v", args, capsToApply, sandboxsetup.SetCapsAndCallSelf(args, capsToApply))
+			panic("unreachable")
 		}
-	}
-	if g.applyCaps {
-		overrides := g.syncFDs.flags()
-		overrides["apply-caps"] = "false"
-		overrides["setup-root"] = "false"
-		args := sandboxsetup.PrepareArgs(g.Name(), f, overrides)
-		capsToApply := goferCaps
-		if conf.GetHostUDS().AllowOpen() {
-			capsToApply = specutils.MergeCapabilities(capsToApply, goferUdsOpenCaps)
-		}
-		util.Fatalf("setCapsAndCallSelf(%v, %v): %v", args, capsToApply, sandboxsetup.SetCapsAndCallSelf(args, capsToApply))
-		panic("unreachable")
 	}
 
 	// This can't happen until after setCapsAndCallSelf(), since otherwise the
@@ -232,27 +234,30 @@ func (g *Gofer) Execute(_ context.Context, f *flag.FlagSet, args ...any) subcomm
 	profileOpts := profile.MakeOpts(&g.profileFDs, conf.ProfileGCInterval)
 	g.stopProfiling = profile.Start(profileOpts)
 
-	// At this point we won't re-execute, so it's safe to limit via rlimits. Any
-	// limit >= 0 works. If the limit is lower than the current number of open
-	// files, then Setrlimit will succeed, and the next open will fail.
-	if conf.FDLimit > -1 {
-		rlimit := unix.Rlimit{
-			Cur: uint64(conf.FDLimit),
-			Max: uint64(conf.FDLimit),
+	root := "/"
+	if !conf.Unprivileged {
+		// At this point we won't re-execute, so it's safe to limit via rlimits. Any
+		// limit >= 0 works. If the limit is lower than the current number of open
+		// files, then Setrlimit will succeed, and the next open will fail.
+		if conf.FDLimit > -1 {
+			rlimit := unix.Rlimit{
+				Cur: uint64(conf.FDLimit),
+				Max: uint64(conf.FDLimit),
+			}
+			switch err := unix.Setrlimit(unix.RLIMIT_NOFILE, &rlimit); err {
+			case nil:
+			case unix.EPERM:
+				log.Warningf("FD limit %d is higher than the current hard limit or system-wide maximum", conf.FDLimit)
+			default:
+				util.Fatalf("Failed to set RLIMIT_NOFILE: %v", err)
+			}
 		}
-		switch err := unix.Setrlimit(unix.RLIMIT_NOFILE, &rlimit); err {
-		case nil:
-		case unix.EPERM:
-			log.Warningf("FD limit %d is higher than the current hard limit or system-wide maximum", conf.FDLimit)
-		default:
-			util.Fatalf("Failed to set RLIMIT_NOFILE: %v", err)
-		}
-	}
 
-	// Find what path is going to be served by this gofer.
-	root := spec.Root.Path
-	if !conf.TestOnlyAllowRunAsCurrentUserWithoutChroot {
-		root = "/root"
+		// Find what path is going to be served by this gofer.
+		root = spec.Root.Path
+		if !conf.TestOnlyAllowRunAsCurrentUserWithoutChroot {
+			root = "/root"
+		}
 	}
 
 	// Resolve mount points paths, then replace mounts from our spec and send the
@@ -288,13 +293,15 @@ func (g *Gofer) Execute(_ context.Context, f *flag.FlagSet, args ...any) subcomm
 	// procfs isn't needed anymore.
 	g.syncFDs.unmountProcfs()
 
-	if err := unix.Chroot(root); err != nil {
-		util.Fatalf("failed to chroot to %q: %v", root, err)
+	if root != "/" {
+		if err := unix.Chroot(root); err != nil {
+			util.Fatalf("failed to chroot to %q: %v", root, err)
+		}
+		if err := unix.Chdir("/"); err != nil {
+			util.Fatalf("changing working dir: %v", err)
+		}
+		log.Infof("Process chroot'd to %q", root)
 	}
-	if err := unix.Chdir("/"); err != nil {
-		util.Fatalf("changing working dir: %v", err)
-	}
-	log.Infof("Process chroot'd to %q", root)
 
 	ruid := unix.Getuid()
 	euid := unix.Geteuid()

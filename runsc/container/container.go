@@ -1555,49 +1555,52 @@ func (c *Container) createGoferProcess(conf *config.Config, mountHints *boot.Pod
 
 	// Enter new namespaces to isolate from the rest of the system. Don't unshare
 	// cgroup because gofer is added to a cgroup in the caller's namespace.
-	nss := []specs.LinuxNamespace{
-		{Type: specs.IPCNamespace},
-		{Type: specs.MountNamespace},
-		{Type: specs.NetworkNamespace},
-		{Type: specs.PIDNamespace},
-		{Type: specs.UTSNamespace},
-	}
-
-	rootlessEUID := unix.Geteuid() != 0
+	nss := []specs.LinuxNamespace{}
 	setUserMappings := false
-	// Setup any uid/gid mappings, and create or join the configured user
-	// namespace so the gofer's view of the filesystem aligns with the
-	// users in the sandbox.
-	if !rootlessEUID {
-		if userNS, ok := specutils.GetNS(specs.UserNamespace, c.Spec); ok {
-			nss = append(nss, userNS)
-			specutils.SetUIDGIDMappings(cmd, c.Spec)
-			// We need to set UID and GID to have capabilities in a new user namespace.
-			cmd.SysProcAttr.Credential = &syscall.Credential{Uid: 0, Gid: 0}
+	if !conf.Unprivileged {
+		nss = []specs.LinuxNamespace{
+			{Type: specs.IPCNamespace},
+			{Type: specs.MountNamespace},
+			{Type: specs.NetworkNamespace},
+			{Type: specs.PIDNamespace},
+			{Type: specs.UTSNamespace},
 		}
-	} else {
-		userNS, ok := specutils.GetNS(specs.UserNamespace, c.Spec)
-		if !ok {
-			return nil, nil, nil, nil, fmt.Errorf("unable to run a rootless container without userns")
-		}
-		nss = append(nss, userNS)
-		if sandbox.CanUseUnprivilegedMapping(c.Spec) {
-			specutils.SetUIDGIDMappings(cmd, c.Spec)
-			cmd.SysProcAttr.GidMappingsEnableSetgroups = false
+
+		rootlessEUID := unix.Geteuid() != 0
+		// Setup any uid/gid mappings, and create or join the configured user
+		// namespace so the gofer's view of the filesystem aligns with the
+		// users in the sandbox.
+		if !rootlessEUID {
+			if userNS, ok := specutils.GetNS(specs.UserNamespace, c.Spec); ok {
+				nss = append(nss, userNS)
+				specutils.SetUIDGIDMappings(cmd, c.Spec)
+				// We need to set UID and GID to have capabilities in a new user namespace.
+				cmd.SysProcAttr.Credential = &syscall.Credential{Uid: 0, Gid: 0}
+			}
 		} else {
-			setUserMappings = true
-		}
-		syncFile, err := sandbox.ConfigureCmdForRootless(cmd, &donations)
-		if err != nil {
-			return nil, nil, nil, nil, err
-		}
-		defer syncFile.Close()
-		uid, gid := sandbox.SandboxUserGroupIDs(c.Spec)
-		if uid != 0 {
-			cmd.Args = append(cmd.Args, fmt.Sprintf("--uid=%d", uid))
-		}
-		if gid != 0 {
-			cmd.Args = append(cmd.Args, fmt.Sprintf("--gid=%d", gid))
+			userNS, ok := specutils.GetNS(specs.UserNamespace, c.Spec)
+			if !ok {
+				return nil, nil, nil, nil, fmt.Errorf("unable to run a rootless container without userns")
+			}
+			nss = append(nss, userNS)
+			if sandbox.CanUseUnprivilegedMapping(c.Spec) {
+				specutils.SetUIDGIDMappings(cmd, c.Spec)
+				cmd.SysProcAttr.GidMappingsEnableSetgroups = false
+			} else {
+				setUserMappings = true
+			}
+			syncFile, err := sandbox.ConfigureCmdForRootless(cmd, &donations)
+			if err != nil {
+				return nil, nil, nil, nil, err
+			}
+			defer syncFile.Close()
+			uid, gid := sandbox.SandboxUserGroupIDs(c.Spec)
+			if uid != 0 {
+				cmd.Args = append(cmd.Args, fmt.Sprintf("--uid=%d", uid))
+			}
+			if gid != 0 {
+				cmd.Args = append(cmd.Args, fmt.Sprintf("--gid=%d", gid))
+			}
 		}
 	}
 
