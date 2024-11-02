@@ -958,8 +958,11 @@ func (s *Sandbox) createSandboxProcess(conf *config.Config, args *Args, startSyn
 	// are virtualized inside the sandbox. Be paranoid and run inside an empty
 	// namespace for these. Don't unshare cgroup because sandbox is added to a
 	// cgroup in the caller's namespace.
+	nss := []specs.LinuxNamespace{}
+	setUserMappings := false
+        if !conf.Unprivileged {
 	log.Infof("Sandbox will be started in new mount, IPC and UTS namespaces")
-	nss := []specs.LinuxNamespace{
+	nss = []specs.LinuxNamespace{
 		{Type: specs.IPCNamespace},
 		{Type: specs.MountNamespace},
 		{Type: specs.UTSNamespace},
@@ -997,7 +1000,6 @@ func (s *Sandbox) createSandboxProcess(conf *config.Config, args *Args, startSyn
 	// namespace specified in the spec or the current namespace if none is
 	// configured.
 	rootlessEUID := unix.Geteuid() != 0
-	setUserMappings := false
 	if conf.Network == config.NetworkHost || conf.DirectFS {
 		if userns, ok := specutils.GetNS(specs.UserNamespace, args.Spec); ok {
 			log.Infof("Sandbox will be started in container's user namespace: %+v", userns)
@@ -1088,6 +1090,7 @@ func (s *Sandbox) createSandboxProcess(conf *config.Config, args *Args, startSyn
 			return fmt.Errorf("can't run sandbox process as user nobody since we don't have CAP_SETUID or CAP_SETGID")
 		}
 	}
+        }
 
 	// The current process' stdio must be passed to the application via the
 	// --stdio-fds flag. The stdio of the sandbox process itself must not
@@ -1696,7 +1699,7 @@ func (s *Sandbox) waitForStopped() error {
 // configureStdios change stdios ownership to give access to the sandbox
 // process. This may be skipped depending on the configuration.
 func (s *Sandbox) configureStdios(conf *config.Config, stdios []*os.File) error {
-	if conf.Rootless || conf.TestOnlyAllowRunAsCurrentUserWithoutChroot {
+	if conf.Unprivileged || conf.Rootless || conf.TestOnlyAllowRunAsCurrentUserWithoutChroot {
 		// Cannot change ownership without CAP_CHOWN.
 		return nil
 	}

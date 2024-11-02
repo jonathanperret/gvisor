@@ -153,6 +153,8 @@ func (g *Gofer) Execute(_ context.Context, f *flag.FlagSet, args ...any) subcomm
 	g.syncFDs.syncNVProxy()
 	g.syncFDs.syncUsernsForRootless()
 
+        root := "/"
+        if !conf.Unprivileged {
 	if g.setUpRoot {
 		if err := g.setupRootFS(spec, conf); err != nil {
 			util.Fatalf("Error setting up root FS: %v", err)
@@ -170,11 +172,13 @@ func (g *Gofer) Execute(_ context.Context, f *flag.FlagSet, args ...any) subcomm
 		util.Fatalf("setCapsAndCallSelf(%v, %v): %v", args, goferCaps, setCapsAndCallSelf(args, goferCaps))
 		panic("unreachable")
 	}
+        }
 
 	// Start profiling. This will be a noop if no profiling arguments were passed.
 	profileOpts := g.profileFDs.ToOpts()
 	g.stopProfiling = profile.Start(profileOpts)
 
+        if !conf.Unprivileged {
 	// At this point we won't re-execute, so it's safe to limit via rlimits. Any
 	// limit >= 0 works. If the limit is lower than the current number of open
 	// files, then Setrlimit will succeed, and the next open will fail.
@@ -193,10 +197,11 @@ func (g *Gofer) Execute(_ context.Context, f *flag.FlagSet, args ...any) subcomm
 	}
 
 	// Find what path is going to be served by this gofer.
-	root := spec.Root.Path
+	root = spec.Root.Path
 	if !conf.TestOnlyAllowRunAsCurrentUserWithoutChroot {
 		root = "/root"
 	}
+        }
 
 	// Resolve mount points paths, then replace mounts from our spec and send the
 	// mount list over to the sandbox, so they are both in sync.
@@ -231,6 +236,7 @@ func (g *Gofer) Execute(_ context.Context, f *flag.FlagSet, args ...any) subcomm
 	// procfs isn't needed anymore.
 	g.syncFDs.unmountProcfs()
 
+        if root != "/" {
 	if err := unix.Chroot(root); err != nil {
 		util.Fatalf("failed to chroot to %q: %v", root, err)
 	}
@@ -238,6 +244,7 @@ func (g *Gofer) Execute(_ context.Context, f *flag.FlagSet, args ...any) subcomm
 		util.Fatalf("changing working dir: %v", err)
 	}
 	log.Infof("Process chroot'd to %q", root)
+        }
 
 	// Initialize filters.
 	opts := filter.Options{
