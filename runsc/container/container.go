@@ -1322,15 +1322,17 @@ func (c *Container) createGoferProcess(spec *specs.Spec, conf *config.Config, bu
 
 	// Enter new namespaces to isolate from the rest of the system. Don't unshare
 	// cgroup because gofer is added to a cgroup in the caller's namespace.
-	nss := []specs.LinuxNamespace{
+        nss := []specs.LinuxNamespace{}
+	rootlessEUID := unix.Geteuid() != 0
+	if !conf.Unprivileged {
+        nss = []specs.LinuxNamespace{
 		{Type: specs.IPCNamespace},
 		{Type: specs.MountNamespace},
 		{Type: specs.NetworkNamespace},
 		{Type: specs.PIDNamespace},
 		{Type: specs.UTSNamespace},
-	}
+        }
 
-	rootlessEUID := unix.Geteuid() != 0
 	// Setup any uid/gid mappings, and create or join the configured user
 	// namespace so the gofer's view of the filesystem aligns with the
 	// users in the sandbox.
@@ -1353,6 +1355,7 @@ func (c *Container) createGoferProcess(spec *specs.Spec, conf *config.Config, bu
 		}
 		defer syncFile.Close()
 	}
+        }
 
 	nvProxySetup, err := nvproxySetupAfterGoferUserns(spec, conf, cmd, &donations)
 	if err != nil {
@@ -1372,7 +1375,7 @@ func (c *Container) createGoferProcess(spec *specs.Spec, conf *config.Config, bu
 	c.goferIsChild = true
 
 	// Set up and synchronize rootless mode userns mappings.
-	if rootlessEUID {
+	if rootlessEUID && !conf.Unprivileged {
 		if err := sandbox.SetUserMappings(spec, cmd.Process.Pid); err != nil {
 			return nil, nil, nil, err
 		}
