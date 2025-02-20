@@ -68,9 +68,15 @@ func (fd *pciDeviceFD) Translate(ctx context.Context, required, optional memmap.
 
 // InvalidateUnsavable implements memmap.Mappable.InvalidateUnsavable.
 func (fd *pciDeviceFD) InvalidateUnsavable(ctx context.Context) error {
+	fd.mapsMu.Lock()
+	defer fd.mapsMu.Unlock()
+	fd.mappings.InvalidateAll(memmap.InvalidateOpts{InvalidatePrivate: true})
 	return nil
 }
 
+// pciDeviceFdMemmapFile implements memmap.File for /dev/vfio/[0-9]+.
+//
+// +stateify savable
 type pciDeviceFdMemmapFile struct {
 	memmap.NoBufferedIOFallback
 

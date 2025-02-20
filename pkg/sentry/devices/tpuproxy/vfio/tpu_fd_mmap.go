@@ -60,6 +60,7 @@ func (fd *tpuFD) InvalidateUnsavable(ctx context.Context) error {
 	return nil
 }
 
+// +stateify savable
 type tpuFDMemmapFile struct {
 	memmap.NoBufferedIOFallback
 
