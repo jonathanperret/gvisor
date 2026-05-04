@@ -26,6 +26,7 @@ jobs:
     - name: build
       run: |
           mkdir -p bin
+          make unit-tests
           make copy TARGETS=runsc DESTINATION=bin/
 
     - name: Upload runsc
